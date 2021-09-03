@@ -3,14 +3,14 @@ use std::ffi::OsString;
 use color_eyre::eyre::Result;
 use envconfig::Envconfig;
 use matrix_sdk::{
-    room::Room,
-    ruma::events::{room::member::MemberEventContent, StrippedStateEvent},
-    Client, ClientConfig, EventHandler, SyncSettings,
+    Client, ClientConfig, SyncSettings,
 };
 use path_abs::PathAbs;
-use time::ext::NumericalStdDuration;
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
+
+mod dispatch;
+mod handlers;
 
 #[derive(Envconfig)]
 struct Config {
@@ -25,50 +25,6 @@ struct Config {
 
     #[envconfig(from = "MATRIX_PASSWORD")]
     password: String,
-}
-
-struct Bot {
-    client: Client,
-}
-
-impl Bot {
-    fn new(client: Client) -> Self {
-        Self { client }
-    }
-}
-
-#[matrix_sdk::async_trait]
-impl EventHandler for Bot {
-    async fn on_stripped_state_member(
-        &self,
-        room: Room,
-        room_member: &StrippedStateEvent<MemberEventContent>,
-        _: Option<MemberEventContent>,
-    ) {
-        if room_member.state_key != self.client.user_id().await.unwrap() {
-            return;
-        }
-
-        if let Room::Invited(room) = room {
-            tracing::info!(room = %room.room_id(), "Joining room");
-
-            let mut delay = 2.std_seconds();
-
-            while let Err(err) = room.accept_invitation().await {
-                tracing::warn!(?err, room = %room.room_id(), ?delay, "Failed to join room, retrying");
-
-                tokio::time::sleep(delay).await;
-                delay *= 2;
-
-                if delay > 3600.std_seconds() {
-                    tracing::error!(?err, room = %room.room_id(), "Couldn't join room");
-                    return;
-                }
-            }
-
-            tracing::info!(room = %room.room_id(), "Joined room");
-        }
-    }
 }
 
 async fn login_and_sync(config: &Config) -> Result<()> {
@@ -86,9 +42,9 @@ async fn login_and_sync(config: &Config) -> Result<()> {
 
     tracing::info!(username = %config.username, "Logged in {}", config.username);
 
-    client
-        .set_event_handler(Box::new(Bot::new(client.clone())))
-        .await;
+    let eh = handlers::build_handlers(client.clone());
+
+    client.set_event_handler(Box::new(eh)).await;
 
     client.sync(SyncSettings::default()).await;
 
