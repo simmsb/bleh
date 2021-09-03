@@ -2,9 +2,7 @@ use std::ffi::OsString;
 
 use color_eyre::eyre::Result;
 use envconfig::Envconfig;
-use matrix_sdk::{
-    Client, ClientConfig, SyncSettings,
-};
+use matrix_sdk::{Client, ClientConfig, SyncSettings};
 use path_abs::PathAbs;
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
@@ -25,6 +23,9 @@ struct Config {
 
     #[envconfig(from = "MATRIX_PASSWORD")]
     password: String,
+
+    #[envconfig(from = "MATRIX_DEVICE_ID")]
+    device_id: Option<String>,
 }
 
 async fn login_and_sync(config: &Config) -> Result<()> {
@@ -36,17 +37,38 @@ async fn login_and_sync(config: &Config) -> Result<()> {
 
     let client = Client::new_with_config(config.homeserver.clone(), client_config)?;
 
+    let device_id = config.device_id.as_deref();
+
+    if let Some(device_id) = device_id {
+        tracing::info!(device_id, "Restoring device id");
+    }
+
     client
-        .login(&config.username, &config.password, None, Some("TestBot"))
+        .login(
+            &config.username,
+            &config.password,
+            device_id,
+            Some("TestBot"),
+        )
         .await?;
 
     tracing::info!(username = %config.username, "Logged in {}", config.username);
 
-    let eh = handlers::build_handlers(client.clone());
+    client.sync_once(SyncSettings::default()).await?;
 
+    if device_id.is_none() {
+        println!(
+            "Generated device id: '{}'",
+            client.device_id().await.unwrap().as_str()
+        );
+    }
+
+    let eh = handlers::build_handlers(client.clone());
     client.set_event_handler(Box::new(eh)).await;
 
-    client.sync(SyncSettings::default()).await;
+    let sync_settings = SyncSettings::default().token(client.sync_token().await.unwrap());
+
+    client.sync(sync_settings).await;
 
     Ok(())
 }

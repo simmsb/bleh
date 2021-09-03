@@ -31,4 +31,16 @@ impl EventHandler for NEventHandler {
                 .await;
         }
     }
+
+    async fn on_room_message(
+        &self,
+        room: Room,
+        message: &matrix_sdk::ruma::events::SyncMessageEvent<
+            matrix_sdk::ruma::events::room::message::MessageEventContent,
+        >,
+    ) {
+        for eh in self.inner_events.as_slice() {
+            eh.on_room_message(room.clone(), message).await;
+        }
+    }
 }
