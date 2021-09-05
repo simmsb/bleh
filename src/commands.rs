@@ -152,6 +152,7 @@ pub trait Command<P> {
 }
 
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct ErasedCommand<'c> {
     params: Vec<ParameterMeta>,
     invoke: Arc<
@@ -187,7 +188,7 @@ where
     }
 
     async fn invoke(self, _: frunk::HList![]) {
-        (self)().await;
+        self().await;
     }
 }
 
@@ -214,7 +215,7 @@ macro_rules! doit {
             async fn invoke(self, params: frunk::HList![$($Y),*]) {
                 let frunk::hlist_pat!($($Y),*) = params;
 
-                (self)($($Y),*).await;
+                self($($Y),*).await;
             }
         }
     }
@@ -232,7 +233,7 @@ fn next_word(s: &str) -> Option<(&str, &str)> {
     if s.trim().is_empty() {
         None
     } else {
-        s.split_once(char::is_whitespace).or_else(|| Some((s, "")))
+        s.split_once(char::is_whitespace).or(Some((s, "")))
     }
 }
 
@@ -296,9 +297,9 @@ impl<'c> Group<'c> {
 
     /// Find a command given a path
     pub fn find_command(&self, path: &[&str]) -> Option<&ErasedCommand<'c>> {
-        match path {
-            &[] => self.fallback.as_ref(),
-            &[x, ref xs @ ..] => match self.inner.get(x) {
+        match *path {
+            [] => self.fallback.as_ref(),
+            [x, ref xs @ ..] => match self.inner.get(x) {
                 Some(GroupOrCommand::Command(c)) => Some(c),
                 Some(GroupOrCommand::Group(g)) => g.find_command(xs),
                 None => self.fallback.as_ref(),
@@ -308,9 +309,9 @@ impl<'c> Group<'c> {
 
     /// Find a command or group given a path, this doesn't peek into Group.fallback
     pub fn find_thing<'a>(&'a self, path: &[&str]) -> Option<GroupOrCommandRef<'a, 'c>> {
-        match path {
-            &[] => Some(GroupOrCommandRef::Group(self)),
-            &[x, ref xs @ ..] => match self.inner.get(x) {
+        match *path {
+            [] => Some(GroupOrCommandRef::Group(self)),
+            [x, ref xs @ ..] => match self.inner.get(x) {
                 Some(GroupOrCommand::Command(c)) => Some(GroupOrCommandRef::Command(c)),
                 Some(GroupOrCommand::Group(g)) => g.find_thing(xs),
                 None => Some(GroupOrCommandRef::Group(self)),
