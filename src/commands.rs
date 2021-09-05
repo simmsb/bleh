@@ -9,11 +9,12 @@ use matrix_sdk::{
     },
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Context {
     pub author: UserId,
     pub room: Joined,
     pub original_event: SyncMessageEvent<MessageEventContent>,
+    pub root: Arc<Group<'static>>,
 }
 
 impl Context {
@@ -109,6 +110,77 @@ p_via_nom!(
     )
 );
 
+impl<T: Parameter> Parameter for Vec<T> {
+    const INFO: &'static str = str_concat(str_concat("Vec<", T::INFO).as_str(), ">").as_str();
+
+    const VISIBLE: bool = T::VISIBLE;
+
+    fn parse<'a>(ctx: &Context, mut input: &'a str) -> nom::IResult<&'a str, Self> {
+        let mut out = Vec::new();
+
+        while let Ok((new_input, v)) = T::parse(ctx, input) {
+            input = new_input;
+            out.push(v);
+        }
+
+        Ok((input, out))
+    }
+}
+
+pub struct Named<T, const NAME: &'static str>(pub T);
+
+struct HelpMe {
+    s: [u8; 255],
+    l: usize,
+}
+
+impl HelpMe {
+    const fn as_str(&self) -> &str {
+        unsafe {
+            let s = &*std::ptr::slice_from_raw_parts(&self.s as *const u8, self.l);
+            std::str::from_utf8_unchecked(s)
+        }
+    }
+}
+
+const fn str_concat(l: &'static str, r: &'static str) -> HelpMe {
+    let mut out = [0u8; 255];
+
+    // The compiler crashes if I try to make the out length const generic
+
+    assert!(l.len() + r.len() < out.len());
+
+    let l = l.as_bytes();
+    let r = r.as_bytes();
+
+    let mut i = 0;
+    while i < l.len() {
+        out[i] = l[i];
+        i += 1;
+    }
+
+    let mut j = 0;
+    while j < r.len() {
+        out[i + j] = r[j];
+        j += 1;
+    }
+
+    HelpMe {
+        s: out,
+        l: l.len() + r.len(),
+    }
+}
+
+impl<T: Parameter, const NAME: &'static str> Parameter for Named<T, NAME> {
+    const INFO: &'static str = str_concat(str_concat(NAME, ": ").as_str(), T::INFO).as_str();
+    const VISIBLE: bool = T::VISIBLE;
+
+    fn parse<'a>(ctx: &Context, input: &'a str) -> nom::IResult<&'a str, Self> {
+        let (input, v) = T::parse(ctx, input)?;
+        nom::IResult::Ok((input, Named(v)))
+    }
+}
+
 pub trait ReifyParameterMeta {
     fn reify_inner(out: &mut Vec<ParameterMeta>);
     fn reify() -> Vec<ParameterMeta> {
@@ -175,6 +247,15 @@ impl<'c> ErasedCommand<'c> {
 
         nom::IResult::Ok(((), ()))
     }
+
+    pub fn format_params(&self) -> String {
+        self.params
+            .iter()
+            .filter(|m| m.visible)
+            .map(|m| m.info)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 #[async_trait::async_trait]
@@ -225,8 +306,8 @@ doit!(dummy, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
 
 #[derive(Default, Clone)]
 pub struct Group<'c> {
-    inner: HashMap<String, GroupOrCommand<'c>>,
-    fallback: Option<ErasedCommand<'c>>,
+    pub inner: HashMap<String, GroupOrCommand<'c>>,
+    pub fallback: Option<ErasedCommand<'c>>,
 }
 
 fn next_word(s: &str) -> Option<(&str, &str)> {
@@ -321,7 +402,7 @@ impl<'c> Group<'c> {
 }
 
 #[derive(enum_as_inner::EnumAsInner, Clone)]
-enum GroupOrCommand<'c> {
+pub enum GroupOrCommand<'c> {
     Command(ErasedCommand<'c>),
     Group(Group<'c>),
 }

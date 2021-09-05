@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use matrix_sdk::{
     room::Room,
     ruma::events::{
@@ -7,12 +9,12 @@ use matrix_sdk::{
     Client, EventHandler,
 };
 
-use crate::commands::{CommandBuilder, Context, Group};
+use crate::commands::{CommandBuilder, Context, Group, Named};
 
 pub struct OnMessage {
     prefix: String,
     client: Client,
-    commands: Group<'static>,
+    commands: Arc<Group<'static>>,
 }
 
 impl OnMessage {
@@ -20,7 +22,7 @@ impl OnMessage {
         Self {
             prefix,
             client,
-            commands: make_commands(),
+            commands: Arc::new(make_commands()),
         }
     }
 
@@ -60,6 +62,7 @@ impl EventHandler for OnMessage {
             author: message.sender.clone(),
             room,
             original_event: message.clone(),
+            root: self.commands.clone(),
         };
 
         let _ = cmd.invoke(ctx, rest).await;
@@ -75,9 +78,51 @@ fn make_commands() -> Group<'static> {
             g.command("a", |c: Context| async move {
                 let _ = c.reply("A").await;
             })
-            .command("b", |c: Context, v: String| async move {
+            .command("b", |c: Context, Named(v): Named<String, "v">| async move {
                 let _ = c.reply(&format!("B: {}", v)).await;
             });
         })
+        .command(
+            "help",
+            |c: Context, Named(path): Named<Vec<String>, "path">| async move {
+                let path = path.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+                let thing = match c.root.find_thing(&path) {
+                    Some(thing) => thing,
+                    None => {
+                        let _ = c.reply(&format!("Couldn't find {}", path.join(" "))).await;
+                        return;
+                    }
+                };
+
+                match thing {
+                    crate::commands::GroupOrCommandRef::Command(cmd) => {
+                        let _ = c
+                            .send(&format!(
+                                "Command: {}\nparams: {}",
+                                path.join(" "),
+                                cmd.format_params()
+                            ))
+                            .await;
+                    }
+                    crate::commands::GroupOrCommandRef::Group(grp) => {
+                        let _ = c
+                            .send(&format!(
+                                "Group: {}\nSubcommands:\n{}\nFallback command: {}",
+                                path.join(" "),
+                                grp.inner
+                                    .keys()
+                                    .map(|cmd| format!("- {}", cmd))
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                                grp.fallback
+                                    .as_ref()
+                                    .map(|cmd| cmd.format_params())
+                                    .unwrap_or("None".to_owned())
+                            ))
+                            .await;
+                    }
+                }
+            },
+        )
         .done()
 }

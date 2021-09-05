@@ -1,3 +1,10 @@
+#![feature(const_generics)]
+#![feature(const_fn_trait_bound)]
+#![feature(const_raw_ptr_deref)]
+#![feature(const_evaluatable_checked)]
+#![feature(const_panic)]
+#![feature(const_slice_from_raw_parts)]
+
 use std::ffi::OsString;
 
 use color_eyre::eyre::Result;
