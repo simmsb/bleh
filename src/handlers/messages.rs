@@ -117,7 +117,7 @@ fn make_commands() -> Group<'static> {
                                 grp.fallback
                                     .as_ref()
                                     .map(|cmd| cmd.format_params())
-                                    .unwrap_or("None".to_owned())
+                                    .unwrap_or_else(|| "None".to_owned())
                             ))
                             .await;
                     }
