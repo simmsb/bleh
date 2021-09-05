@@ -14,7 +14,7 @@ impl OnJoin {
         Self { client }
     }
 
-    pub fn as_eh(self) -> Box<dyn EventHandler> {
+    pub fn into_eh(self) -> Box<dyn EventHandler> {
         Box::new(self)
     }
 }

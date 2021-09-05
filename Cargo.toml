@@ -6,10 +6,15 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-trait = "0.1.51"
 color-eyre = "0.5.11"
+enum-as-inner = "0.3.3"
 envconfig = "0.10.0"
+frunk = "0.4.0"
 matrix-sdk = { git = "https://github.com/matrix-org/matrix-rust-sdk.git" }
+nom = "7.0.0"
 path_abs = "0.5.1"
+proxy-enum = "0.3.1"
 time = "0.3.2"
 tokio = { version = "1.11.0", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.26"

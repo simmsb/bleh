@@ -7,6 +7,7 @@ use path_abs::PathAbs;
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
+pub mod commands;
 mod dispatch;
 mod handlers;
 
