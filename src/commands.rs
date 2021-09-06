@@ -35,6 +35,33 @@ impl Context {
 
         self.room.send(m, None).await
     }
+
+    pub async fn send_html(
+        &self,
+        plain: &str,
+        html: &str,
+    ) -> matrix_sdk::Result<send_message_event::Response> {
+        let m = AnyMessageEventContent::RoomMessage(MessageEventContent::text_html(plain, html));
+
+        self.room.send(m, None).await
+    }
+
+    pub async fn reply_html(
+        &self,
+        plain: &str,
+        html: &str,
+    ) -> matrix_sdk::Result<send_message_event::Response> {
+        let m = AnyMessageEventContent::RoomMessage(MessageEventContent::text_reply_html(
+            plain,
+            html,
+            &self
+                .original_event
+                .clone()
+                .into_full_event(self.room.room_id().clone()),
+        ));
+
+        self.room.send(m, None).await
+    }
 }
 
 pub trait Parameter
@@ -248,13 +275,12 @@ impl<'c> ErasedCommand<'c> {
         nom::IResult::Ok(((), ()))
     }
 
+    pub fn visible_params(&self) -> impl Iterator<Item = &str> {
+        self.params.iter().filter(|m| m.visible).map(|m| m.info)
+    }
+
     pub fn format_params(&self) -> String {
-        self.params
-            .iter()
-            .filter(|m| m.visible)
-            .map(|m| m.info)
-            .collect::<Vec<_>>()
-            .join(", ")
+        self.visible_params().collect::<Vec<_>>().join(", ")
     }
 }
 

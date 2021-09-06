@@ -69,10 +69,78 @@ impl EventHandler for OnMessage {
     }
 }
 
+#[derive(askama::Template)]
+#[template(path = "command_help.html")]
+struct HtmlCommandHelpTemplate<'a> {
+    name: &'a str,
+    params: &'a [&'a str],
+}
+
+impl<'a> HtmlCommandHelpTemplate<'a> {
+    fn new(name: &'a str, params: &'a [&'a str]) -> Self {
+        Self { name, params }
+    }
+}
+
+#[derive(askama::Template)]
+#[template(path = "command_help.txt")]
+struct PlainCommandHelpTemplate<'a> {
+    name: &'a str,
+    params: &'a [&'a str],
+}
+
+impl<'a> PlainCommandHelpTemplate<'a> {
+    fn new(name: &'a str, params: &'a [&'a str]) -> Self {
+        Self { name, params }
+    }
+}
+
+#[derive(askama::Template)]
+#[template(path = "group_help.html")]
+struct HtmlGroupHelpTemplate<'a> {
+    name: &'a str,
+    subcommands: &'a [&'a str],
+    fallback: Option<&'a [&'a str]>,
+}
+
+impl<'a> HtmlGroupHelpTemplate<'a> {
+    fn new(name: &'a str, subcommands: &'a [&'a str], fallback: Option<&'a [&'a str]>) -> Self {
+        Self {
+            name,
+            subcommands,
+            fallback,
+        }
+    }
+}
+
+#[derive(askama::Template)]
+#[template(path = "group_help.txt")]
+struct PlainGroupHelpTemplate<'a> {
+    name: &'a str,
+    subcommands: &'a [&'a str],
+    fallback: Option<&'a [&'a str]>,
+}
+
+impl<'a> PlainGroupHelpTemplate<'a> {
+    fn new(name: &'a str, subcommands: &'a [&'a str], fallback: Option<&'a [&'a str]>) -> Self {
+        Self {
+            name,
+            subcommands,
+            fallback,
+        }
+    }
+}
+
 fn make_commands() -> Group<'static> {
+    use askama::Template;
+
     CommandBuilder::new()
         .command("hi", |c: Context| async move {
             let _ = c.send("Hi").await;
+        })
+        .command("fart", |c: Context| async move {
+            let _ = c.send_html("*farts*", "<h1><span data-mx-color=\"#7a5901\">*farts*</span></h1>").await;
+            
         })
         .group("grp", |g| {
             g.command("a", |c: Context| async move {
@@ -96,30 +164,32 @@ fn make_commands() -> Group<'static> {
 
                 match thing {
                     crate::commands::GroupOrCommandRef::Command(cmd) => {
-                        let _ = c
-                            .send(&format!(
-                                "Command: {}\nparams: {}",
-                                path.join(" "),
-                                cmd.format_params()
-                            ))
-                            .await;
+                        let name = path.join(" ");
+                        let params = cmd.visible_params().collect::<Vec<_>>();
+                        let plain = PlainCommandHelpTemplate::new(&name, &params)
+                            .render()
+                            .unwrap();
+                        let html = HtmlCommandHelpTemplate::new(&name, &params)
+                            .render()
+                            .unwrap();
+                        let _ = c.send_html(&plain, &html).await;
                     }
                     crate::commands::GroupOrCommandRef::Group(grp) => {
-                        let _ = c
-                            .send(&format!(
-                                "Group: {}\nSubcommands:\n{}\nFallback command: {}",
-                                path.join(" "),
-                                grp.inner
-                                    .keys()
-                                    .map(|cmd| format!("- {}", cmd))
-                                    .collect::<Vec<_>>()
-                                    .join("\n"),
-                                grp.fallback
-                                    .as_ref()
-                                    .map(|cmd| cmd.format_params())
-                                    .unwrap_or_else(|| "None".to_owned())
-                            ))
-                            .await;
+                        let name = path.join(" ");
+                        let subcommands = grp.inner.keys().map(|k| k.as_str()).collect::<Vec<_>>();
+                        let fallback = grp
+                            .fallback
+                            .as_ref()
+                            .map(|cmd| cmd.visible_params().collect::<Vec<_>>());
+                        let plain =
+                            PlainGroupHelpTemplate::new(&name, &subcommands, fallback.as_deref())
+                                .render()
+                                .unwrap();
+                        let html =
+                            HtmlGroupHelpTemplate::new(&name, &subcommands, fallback.as_deref())
+                                .render()
+                                .unwrap();
+                        let _ = c.send_html(&plain, &html).await;
                     }
                 }
             },

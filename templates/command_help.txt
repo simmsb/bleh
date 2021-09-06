@@ -1,0 +1,9 @@
+Command: {{ name }}
+{% if !params.is_empty() -%}
+    Params:
+    {% for param in params %}
+        - {{ param }}
+    {% endfor %}
+{%- else -%}
+    No parameters
+{%- endif %}

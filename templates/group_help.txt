@@ -1,0 +1,31 @@
+{% if !name.is_empty() %}
+Group: {{ name }}
+{% endif %}
+
+{%- if !subcommands.is_empty() -%}
+    {% if !name.is_empty() %}
+        Subcommands:
+    {% else %}
+        Commands:
+    {% endif %}
+    {%- for command in subcommands %}
+        - {{ command }}
+    {% endfor %}
+{%- else -%}
+    No subcommands
+{%- endif %}
+
+{% match fallback -%}
+    {% when Some with (fallback_params) %}
+        Fallback command
+        {% if !fallback_params.is_empty() %}
+            Params:
+            {% for param in fallback_params %}
+                - {{ param }}
+            {% endfor %}
+        {%- else -%}
+            No parameters
+        {%- endif %}
+    {% when None %}
+       No fallback command
+{% endmatch %}

@@ -1,0 +1,11 @@
+<h3>Command: {{ name }}</h3>
+{% if !params.is_empty() -%}
+<h5>Params:</h5>
+<ol>
+    {% for param in params %}
+    <li>{{ param }}</li>
+    {% endfor %}
+</ol>
+{%- else -%}
+No parameters
+{%- endif %}

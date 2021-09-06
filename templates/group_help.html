@@ -1,0 +1,36 @@
+{% if !name.is_empty() %}
+<h3>Group: {{ name }}</h3>
+{% endif %}
+
+{%- if !subcommands.is_empty() -%}
+    {% if !name.is_empty() %}
+        <h5>Subcommands:</h5>
+    {% else %}
+        <h3>Commands:</h3>
+    {% endif %}
+    <ul>
+        {%- for command in subcommands %}
+            <li>{{ command }}</li>
+        {% endfor %}
+    </ul>
+{%- else -%}
+    No subcommands
+{%- endif %}
+
+{% match fallback -%}
+    {% when Some with (fallback_params) %}
+        <h5>Fallback Command</h5>
+        {% if !fallback_params.is_empty() -%}
+            <h6>Params:</h6>
+            <ol>
+                {% for param in fallback_params %}
+                <li>{{ param }}</li>
+                {% endfor %}
+            </ol>
+        {%- else -%}
+            No parameters
+        {%- endif %}
+    {% when None %}
+        <br />
+        No fallback command
+{% endmatch %}
