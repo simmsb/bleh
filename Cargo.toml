@@ -8,6 +8,7 @@ edition = "2018"
 [dependencies]
 askama = "0.10.5"
 async-trait = "0.1.51"
+chrono = "0.4.19"
 color-eyre = "0.5.11"
 enum-as-inner = "0.3.3"
 envconfig = "0.10.0"
@@ -16,6 +17,8 @@ matrix-sdk = { git = "https://github.com/matrix-org/matrix-rust-sdk.git" }
 nom = "7.0.0"
 path_abs = "0.5.1"
 proxy-enum = "0.3.1"
+rrule = "0.5.9"
+sqlx = { version = "0.5.7", features = ["sqlite", "runtime-tokio-native-tls"] }
 time = "0.3.2"
 tokio = { version = "1.11.0", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.26"

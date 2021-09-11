@@ -4,6 +4,7 @@
 #![feature(const_evaluatable_checked)]
 #![feature(const_panic)]
 #![feature(const_slice_from_raw_parts)]
+#![feature(const_type_name)]
 
 use std::ffi::OsString;
 
@@ -13,8 +14,10 @@ use matrix_sdk::{Client, ClientConfig, SyncSettings};
 use path_abs::PathAbs;
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
+use sqlx::sqlite::SqlitePool;
 
 pub mod commands;
+pub mod rrules;
 mod handlers;
 
 #[derive(Envconfig)]
@@ -33,9 +36,12 @@ struct Config {
 
     #[envconfig(from = "MATRIX_DEVICE_ID")]
     device_id: Option<String>,
+
+    #[envconfig(from = "DATABASE_URL")]
+    sqlite_url: String,
 }
 
-async fn login_and_sync(config: &Config) -> Result<()> {
+async fn login_and_sync(config: &Config, pool: SqlitePool) -> Result<()> {
     let dir = PathAbs::new(&config.config_path)?;
 
     fs::create_dir_all(&dir).await?;
@@ -70,7 +76,9 @@ async fn login_and_sync(config: &Config) -> Result<()> {
         );
     }
 
-    handlers::register_handlers(client.clone()).await;
+    rrules::setup(client.clone(), &pool).await;
+
+    handlers::register_handlers(client.clone(), pool).await;
 
     let sync_settings = SyncSettings::default().token(client.sync_token().await.unwrap());
 
@@ -88,7 +96,9 @@ async fn main() -> Result<()> {
 
     let config = Config::init_from_env()?;
 
-    login_and_sync(&config).await?;
+    let pool = SqlitePool::connect(&config.sqlite_url).await?;
+
+    login_and_sync(&config, pool).await?;
 
     Ok(())
 }

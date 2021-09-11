@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
+use std::{collections::HashMap, error::Error, future::Future, pin::Pin, str::FromStr, sync::Arc};
 
 use matrix_sdk::{
     room::Joined,
@@ -7,31 +7,35 @@ use matrix_sdk::{
         events::{room::message::MessageEventContent, AnyMessageEventContent, SyncMessageEvent},
         UserId,
     },
+    Client,
 };
+use sqlx::SqlitePool;
 
 #[derive(Clone)]
 pub struct Context {
+    pub client: Client,
     pub author: UserId,
     pub room: Joined,
     pub original_event: SyncMessageEvent<MessageEventContent>,
     pub root: Arc<Group<'static>>,
+    pub pool: SqlitePool,
 }
 
 impl Context {
     pub async fn send(&self, msg: &str) -> matrix_sdk::Result<send_message_event::Response> {
-        let m = AnyMessageEventContent::RoomMessage(MessageEventContent::text_plain(msg));
+        let m = MessageEventContent::text_plain(msg);
 
         self.room.send(m, None).await
     }
 
     pub async fn reply(&self, msg: &str) -> matrix_sdk::Result<send_message_event::Response> {
-        let m = AnyMessageEventContent::RoomMessage(MessageEventContent::text_reply_plain(
+        let m = MessageEventContent::text_reply_plain(
             msg,
             &self
                 .original_event
                 .clone()
                 .into_full_event(self.room.room_id().clone()),
-        ));
+        );
 
         self.room.send(m, None).await
     }
@@ -71,7 +75,7 @@ where
     const INFO: &'static str;
     const VISIBLE: bool;
 
-    fn parse<'a>(ctx: &Context, input: &'a str) -> nom::IResult<&'a str, Self>;
+    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>>;
     fn meta() -> ParameterMeta {
         ParameterMeta {
             info: Self::INFO,
@@ -92,12 +96,16 @@ macro_rules! p_via_nom {
             const INFO: &'static str = stringify!($T);
             const VISIBLE: bool = true;
 
-            fn parse<'a>(_ctx: &Context, input: &'a str) -> nom::IResult<&'a str, Self> {
+            fn parse<'a>(
+                _ctx: &Context,
+                input: &'a str,
+            ) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
                 nom::sequence::delimited(
                     nom::character::complete::multispace0,
                     $fn,
                     nom::character::complete::multispace0,
                 )(input)
+                .map_err(|e: nom::Err<nom::error::Error<_>>| e.into())
             }
         }
     };
@@ -107,8 +115,17 @@ impl Parameter for Context {
     const INFO: &'static str = "Context";
     const VISIBLE: bool = false;
 
-    fn parse<'a>(ctx: &Context, input: &'a str) -> nom::IResult<&'a str, Self> {
-        nom::IResult::Ok((input, ctx.clone()))
+    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+        Ok((input, ctx.clone()))
+    }
+}
+
+impl Parameter for SqlitePool {
+    const INFO: &'static str = "SqlitePool";
+    const VISIBLE: bool = false;
+
+    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+        Ok((input, ctx.pool.clone()))
     }
 }
 
@@ -137,12 +154,45 @@ p_via_nom!(
     )
 );
 
+#[derive(Clone)]
+pub struct Remainder(pub String);
+
+impl Parameter for Remainder {
+    const INFO: &'static str = "String*";
+
+    const VISIBLE: bool = true;
+
+    fn parse<'a>(_ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+        Ok(("", Self(input.to_string())))
+    }
+}
+
+pub struct ViaFromStr<T>(pub T);
+
+impl<T: FromStr> Parameter for ViaFromStr<T>
+where
+    <T as FromStr>::Err: Error + 'static,
+{
+    const INFO: &'static str = std::any::type_name::<T>();
+
+    const VISIBLE: bool = true;
+
+    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+        let (input, chunk) = <String as Parameter>::parse(ctx, input)?;
+        let res = chunk.parse()?;
+        Ok((input, ViaFromStr(res)))
+    }
+}
+
 impl<T: Parameter> Parameter for Vec<T> {
     const INFO: &'static str = str_concat(str_concat("Vec<", T::INFO).as_str(), ">").as_str();
 
     const VISIBLE: bool = T::VISIBLE;
 
-    fn parse<'a>(ctx: &Context, mut input: &'a str) -> nom::IResult<&'a str, Self> {
+    fn parse<'a>(
+        ctx: &Context,
+        mut input: &'a str,
+    ) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
         let mut out = Vec::new();
 
         while let Ok((new_input, v)) = T::parse(ctx, input) {
@@ -202,9 +252,9 @@ impl<T: Parameter, const NAME: &'static str> Parameter for Named<T, NAME> {
     const INFO: &'static str = str_concat(str_concat(NAME, ": ").as_str(), T::INFO).as_str();
     const VISIBLE: bool = T::VISIBLE;
 
-    fn parse<'a>(ctx: &Context, input: &'a str) -> nom::IResult<&'a str, Self> {
+    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
         let (input, v) = T::parse(ctx, input)?;
-        nom::IResult::Ok((input, Named(v)))
+        Ok((input, Named(v)))
     }
 }
 
@@ -230,7 +280,7 @@ impl ReifyParameterMeta for frunk::HNil {
 
 #[async_trait::async_trait]
 pub trait Command<P> {
-    fn parse(ctx: Context, input: &str) -> nom::IResult<&str, P>;
+    fn parse(ctx: Context, input: &str) -> Result<(&str, P), Box<dyn Error + '_>>;
 
     async fn invoke(self, params: P);
 
@@ -244,7 +294,7 @@ pub trait Command<P> {
             invoke: Arc::new(move |ctx, input| {
                 let (input, params): (&str, P) = Self::parse(ctx, input)?;
 
-                nom::IResult::Ok((input, self.clone().invoke(params)))
+                Ok((input, self.clone().invoke(params)))
             }),
         }
     }
@@ -255,8 +305,13 @@ pub trait Command<P> {
 pub struct ErasedCommand<'c> {
     params: Vec<ParameterMeta>,
     invoke: Arc<
-        dyn Fn(Context, &str) -> nom::IResult<&str, Pin<Box<dyn Future<Output = ()> + Send + 'c>>>
-            + Send
+        dyn for<'a> Fn(
+                Context,
+                &'a str,
+            ) -> Result<
+                (&'a str, Pin<Box<dyn Future<Output = ()> + Send + 'c>>),
+                Box<dyn Error + 'a>,
+            > + Send
             + Sync
             + 'c,
     >,
@@ -267,12 +322,12 @@ impl<'c> ErasedCommand<'c> {
         &self,
         ctx: Context,
         input: &'i str,
-    ) -> nom::IResult<(), (), nom::error::Error<&'i str>> {
+    ) -> Result<(), Box<dyn Error + 'i>> {
         let (_, fut) = (self.invoke)(ctx, input)?;
 
         fut.await;
 
-        nom::IResult::Ok(((), ()))
+        Ok(())
     }
 
     pub fn visible_params(&self) -> impl Iterator<Item = &str> {
@@ -290,8 +345,8 @@ where
     F: FnOnce() -> Fut + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = ()> + Send,
 {
-    fn parse(_: Context, input: &str) -> nom::IResult<&str, frunk::HList![]> {
-        nom::IResult::Ok((input, frunk::hlist!()))
+    fn parse(_: Context, input: &str) -> Result<(&str, frunk::HList![]), Box<dyn Error + '_>> {
+        Ok((input, frunk::hlist!()))
     }
 
     async fn invoke(self, _: frunk::HList![]) {
@@ -311,12 +366,12 @@ macro_rules! doit {
                   Fut: std::future::Future<Output = ()> + Send,
                   $($Y: Parameter + Send + 'static),*
         {
-            fn parse(ctx: Context, input: &str) -> nom::IResult<&str, frunk::HList![$($Y),*]> {
+            fn parse(ctx: Context, input: &str) -> Result<(&str, frunk::HList![$($Y),*]), Box<dyn Error + '_>> {
                 $(
                     let (input, $Y) = $Y::parse(&ctx, input)?;
                 )*
 
-                nom::IResult::Ok((input, frunk::hlist![$($Y),*]))
+                Ok((input, frunk::hlist![$($Y),*]))
             }
 
             async fn invoke(self, params: frunk::HList![$($Y),*]) {

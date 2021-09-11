@@ -8,22 +8,26 @@ use matrix_sdk::{
     },
     Client,
 };
+use rrule::RRule;
+use sqlx::SqlitePool;
 
-use crate::commands::{CommandBuilder, Context, Group, Named};
+use crate::commands::{CommandBuilder, Context, Group, Named, Remainder};
 
 #[derive(Clone)]
 pub struct OnMessage {
     prefix: Arc<String>,
     client: Client,
     commands: Arc<Group<'static>>,
+    pool: SqlitePool,
 }
 
 impl OnMessage {
-    pub fn new(prefix: String, client: Client) -> Self {
+    pub fn new(prefix: String, client: Client, pool: SqlitePool) -> Self {
         Self {
             prefix: Arc::new(prefix),
             client,
             commands: Arc::new(make_commands()),
+            pool,
         }
     }
 
@@ -65,10 +69,12 @@ impl OnMessage {
         };
 
         let ctx = Context {
+            client: self.client.clone(),
             author: message.sender.clone(),
             room,
             original_event: message.clone(),
             root: self.commands.clone(),
+            pool: self.pool.clone(),
         };
 
         let _ = cmd.invoke(ctx, rest).await;
@@ -152,6 +158,50 @@ fn make_commands() -> Group<'static> {
                 )
                 .await;
         })
+        .command(
+            "recur",
+            |c: Context,
+             p: SqlitePool,
+             Named(rule): Named<String, "rule">,
+             Named(Remainder(message)): Named<Remainder, "message">| async move {
+                let _parsed_rule: RRule = match rule.parse() {
+                    Ok(rule) => rule,
+                    Err(e) => {
+                        let _ = c.reply(&format!("Couldn't parse rule: {:?}", e)).await;
+                        return;
+                    }
+                };
+
+                let room_id = c.room.room_id().as_ref();
+                let author_id = c.author.as_ref();
+                let id = sqlx::query!(
+                    r#"INSERT INTO rrules ( rule, message, channel, userid )
+                       VALUES ( ?1, ?2, ?3, ?4 )"#,
+                    rule,
+                    message,
+                    room_id,
+                    author_id,
+                )
+                .execute(&p)
+                .await
+                .unwrap()
+                .last_insert_rowid();
+
+                let r = crate::rrules::RRule {
+                    id,
+                    rule,
+                    message,
+                    channel: room_id.to_owned(),
+                    userid: author_id.to_owned(),
+                };
+
+                let _ = c.reply("Sure thing dude").await;
+
+                tokio::spawn(async move {
+                    r.perform(c.client).await;
+                });
+            },
+        )
         .group("grp", |g| {
             g.command("a", |c: Context| async move {
                 let _ = c.reply("A").await;
