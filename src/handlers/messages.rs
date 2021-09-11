@@ -6,13 +6,14 @@ use matrix_sdk::{
         room::message::{MessageEventContent, MessageType, TextMessageEventContent},
         SyncMessageEvent,
     },
-    Client, EventHandler,
+    Client,
 };
 
 use crate::commands::{CommandBuilder, Context, Group, Named};
 
+#[derive(Clone)]
 pub struct OnMessage {
-    prefix: String,
+    prefix: Arc<String>,
     client: Client,
     commands: Arc<Group<'static>>,
 }
@@ -20,20 +21,25 @@ pub struct OnMessage {
 impl OnMessage {
     pub fn new(prefix: String, client: Client) -> Self {
         Self {
-            prefix,
+            prefix: Arc::new(prefix),
             client,
             commands: Arc::new(make_commands()),
         }
     }
 
-    pub fn into_eh(self) -> Box<dyn EventHandler> {
-        Box::new(self)
+    pub async fn register(self, client: Client) {
+        let self_ = Arc::new(self);
+        client
+            .register_event_handler(move |message, room| {
+                let self_ = self_.clone();
+                async move {
+                    self_.on_room_message(room, message).await;
+                }
+            })
+            .await;
     }
-}
 
-#[matrix_sdk::async_trait]
-impl EventHandler for OnMessage {
-    async fn on_room_message(&self, room: Room, message: &SyncMessageEvent<MessageEventContent>) {
+    async fn on_room_message(&self, room: Room, message: SyncMessageEvent<MessageEventContent>) {
         let room = match room {
             Room::Joined(room) => room,
             _ => return,
@@ -48,7 +54,7 @@ impl EventHandler for OnMessage {
             _ => return,
         };
 
-        let rest = match msg_body.strip_prefix(&self.prefix) {
+        let rest = match msg_body.strip_prefix(self.prefix.as_str()) {
             Some(rest) => rest,
             None => return,
         };
@@ -139,8 +145,12 @@ fn make_commands() -> Group<'static> {
             let _ = c.send("Hi").await;
         })
         .command("fart", |c: Context| async move {
-            let _ = c.send_html("*farts*", "<h1><span data-mx-color=\"#7a5901\">*farts*</span></h1>").await;
-            
+            let _ = c
+                .send_html(
+                    "*farts*",
+                    "<h1><span data-mx-color=\"#7a5901\">*farts*</span></h1>",
+                )
+                .await;
         })
         .group("grp", |g| {
             g.command("a", |c: Context| async move {

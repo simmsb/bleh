@@ -15,7 +15,6 @@ use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
 pub mod commands;
-mod dispatch;
 mod handlers;
 
 #[derive(Envconfig)]
@@ -71,8 +70,7 @@ async fn login_and_sync(config: &Config) -> Result<()> {
         );
     }
 
-    let eh = handlers::build_handlers(client.clone());
-    client.set_event_handler(Box::new(eh)).await;
+    handlers::register_handlers(client.clone()).await;
 
     let sync_settings = SyncSettings::default().token(client.sync_token().await.unwrap());
 

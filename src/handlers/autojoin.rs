@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use matrix_sdk::{
     room::Room,
     ruma::events::{room::member::MemberEventContent, StrippedStateEvent},
-    Client, EventHandler,
+    Client,
 };
 use time::ext::NumericalStdDuration;
 
+#[derive(Clone)]
 pub struct OnJoin {
     client: Client,
 }
@@ -14,18 +17,22 @@ impl OnJoin {
         Self { client }
     }
 
-    pub fn into_eh(self) -> Box<dyn EventHandler> {
-        Box::new(self)
+    pub async fn register(self, client: Client) {
+        let self_ = Arc::new(self);
+        client
+            .register_event_handler(move |room_member, room| {
+                let self_ = self_.clone();
+                async move {
+                    self_.on_stripped_state_member(room_member, room).await;
+                }
+            })
+            .await;
     }
-}
 
-#[matrix_sdk::async_trait]
-impl EventHandler for OnJoin {
     async fn on_stripped_state_member(
         &self,
+        room_member: StrippedStateEvent<MemberEventContent>,
         room: Room,
-        room_member: &StrippedStateEvent<MemberEventContent>,
-        _: Option<MemberEventContent>,
     ) {
         if room_member.state_key != self.client.user_id().await.unwrap() {
             return;
