@@ -24,7 +24,12 @@ impl RRule {
         let room_id = RoomId::try_from(self.channel.as_str()).unwrap();
         let user_id = UserId::try_from(self.userid.as_str()).unwrap();
 
+        let now = chrono::offset::Utc::now();
         for dt in &rrule {
+            if dt < now {
+                continue;
+            }
+
             println!("rrule until: {}", dt);
 
             let utcnow = chrono::offset::Utc::now().timestamp();

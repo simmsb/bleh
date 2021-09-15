@@ -10,7 +10,7 @@ use std::ffi::OsString;
 
 use color_eyre::eyre::Result;
 use envconfig::Envconfig;
-use matrix_sdk::{Client, ClientConfig, SyncSettings};
+use matrix_sdk::{Client, config::{ClientConfig, SyncSettings}};
 use path_abs::PathAbs;
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
