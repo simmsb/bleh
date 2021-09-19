@@ -16,7 +16,8 @@ use tokio::fs;
 use tracing_subscriber::EnvFilter;
 use sqlx::sqlite::SqlitePool;
 
-pub mod commands;
+mod commands;
+pub mod framework;
 pub mod rrules;
 mod handlers;
 
@@ -78,7 +79,7 @@ async fn login_and_sync(config: &Config, pool: SqlitePool) -> Result<()> {
 
     rrules::setup(client.clone(), &pool).await;
 
-    handlers::register_handlers(client.clone(), pool).await;
+    handlers::register_handlers(client.clone(), pool, commands::make_commands()).await;
 
     let sync_settings = SyncSettings::default().token(client.sync_token().await.unwrap());
 
