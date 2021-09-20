@@ -8,11 +8,16 @@ use crate::framework::{CommandBuilder, Context, Group, Named, Remainder};
 struct HtmlCommandHelpTemplate<'a> {
     name: &'a str,
     params: &'a [&'a str],
+    description: Option<&'a str>,
 }
 
 impl<'a> HtmlCommandHelpTemplate<'a> {
-    fn new(name: &'a str, params: &'a [&'a str]) -> Self {
-        Self { name, params }
+    fn new(name: &'a str, params: &'a [&'a str], description: Option<&'a str>) -> Self {
+        Self {
+            name,
+            params,
+            description,
+        }
     }
 }
 
@@ -21,11 +26,16 @@ impl<'a> HtmlCommandHelpTemplate<'a> {
 struct PlainCommandHelpTemplate<'a> {
     name: &'a str,
     params: &'a [&'a str],
+    description: Option<&'a str>,
 }
 
 impl<'a> PlainCommandHelpTemplate<'a> {
-    fn new(name: &'a str, params: &'a [&'a str]) -> Self {
-        Self { name, params }
+    fn new(name: &'a str, params: &'a [&'a str], description: Option<&'a str>) -> Self {
+        Self {
+            name,
+            params,
+            description,
+        }
     }
 }
 
@@ -35,14 +45,21 @@ struct HtmlGroupHelpTemplate<'a> {
     name: &'a str,
     subcommands: &'a [&'a str],
     fallback: Option<&'a [&'a str]>,
+    description: Option<&'a str>,
 }
 
 impl<'a> HtmlGroupHelpTemplate<'a> {
-    fn new(name: &'a str, subcommands: &'a [&'a str], fallback: Option<&'a [&'a str]>) -> Self {
+    fn new(
+        name: &'a str,
+        subcommands: &'a [&'a str],
+        fallback: Option<&'a [&'a str]>,
+        description: Option<&'a str>,
+    ) -> Self {
         Self {
             name,
             subcommands,
             fallback,
+            description,
         }
     }
 }
@@ -53,14 +70,21 @@ struct PlainGroupHelpTemplate<'a> {
     name: &'a str,
     subcommands: &'a [&'a str],
     fallback: Option<&'a [&'a str]>,
+    description: Option<&'a str>,
 }
 
 impl<'a> PlainGroupHelpTemplate<'a> {
-    fn new(name: &'a str, subcommands: &'a [&'a str], fallback: Option<&'a [&'a str]>) -> Self {
+    fn new(
+        name: &'a str,
+        subcommands: &'a [&'a str],
+        fallback: Option<&'a [&'a str]>,
+        description: Option<&'a str>,
+    ) -> Self {
         Self {
             name,
             subcommands,
             fallback,
+            description,
         }
     }
 }
@@ -69,9 +93,11 @@ pub fn make_commands() -> Group<'static> {
     use askama::Template;
 
     CommandBuilder::new()
+        .description("say hi")
         .command("hi", |c: Context| async move {
             let _ = c.send("Hi").await;
         })
+        .description("uh oh")
         .command("fart", |c: Context| async move {
             let _ = c
                 .send_html(
@@ -80,6 +106,7 @@ pub fn make_commands() -> Group<'static> {
                 )
                 .await;
         })
+        .description("Some dumb recurrence rule thing")
         .command(
             "recur",
             |c: Context,
@@ -124,6 +151,7 @@ pub fn make_commands() -> Group<'static> {
                 });
             },
         )
+        .description("no idea mate")
         .group("grp", |g| {
             g.command("a", |c: Context| async move {
                 let _ = c.reply("A").await;
@@ -132,6 +160,7 @@ pub fn make_commands() -> Group<'static> {
                 let _ = c.reply(&format!("B: {}", v)).await;
             });
         })
+        .description("get help lol")
         .command(
             "help",
             |c: Context, Named(path): Named<Vec<String>, "path">| async move {
@@ -148,12 +177,20 @@ pub fn make_commands() -> Group<'static> {
                     crate::framework::GroupOrCommandRef::Command(cmd) => {
                         let name = path.join(" ");
                         let params = cmd.visible_params().collect::<Vec<_>>();
-                        let plain = PlainCommandHelpTemplate::new(&name, &params)
-                            .render()
-                            .unwrap();
-                        let html = HtmlCommandHelpTemplate::new(&name, &params)
-                            .render()
-                            .unwrap();
+                        let plain = PlainCommandHelpTemplate::new(
+                            &name,
+                            &params,
+                            cmd.description.as_deref(),
+                        )
+                        .render()
+                        .unwrap();
+                        let html = HtmlCommandHelpTemplate::new(
+                            &name,
+                            &params,
+                            cmd.description.as_deref(),
+                        )
+                        .render()
+                        .unwrap();
                         let _ = c.send_html(&plain, &html).await;
                     }
                     crate::framework::GroupOrCommandRef::Group(grp) => {
@@ -163,14 +200,22 @@ pub fn make_commands() -> Group<'static> {
                             .fallback
                             .as_ref()
                             .map(|cmd| cmd.visible_params().collect::<Vec<_>>());
-                        let plain =
-                            PlainGroupHelpTemplate::new(&name, &subcommands, fallback.as_deref())
-                                .render()
-                                .unwrap();
-                        let html =
-                            HtmlGroupHelpTemplate::new(&name, &subcommands, fallback.as_deref())
-                                .render()
-                                .unwrap();
+                        let plain = PlainGroupHelpTemplate::new(
+                            &name,
+                            &subcommands,
+                            fallback.as_deref(),
+                            grp.description.as_deref(),
+                        )
+                        .render()
+                        .unwrap();
+                        let html = HtmlGroupHelpTemplate::new(
+                            &name,
+                            &subcommands,
+                            fallback.as_deref(),
+                            grp.description.as_deref(),
+                        )
+                        .render()
+                        .unwrap();
                         let _ = c.send_html(&plain, &html).await;
                     }
                 }

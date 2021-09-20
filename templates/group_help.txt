@@ -2,6 +2,12 @@
 Group: {{ name }}
 {% endif %}
 
+{% match description %}
+    {% when Some with (description) %}
+        Description: {{ description }}
+    {% when None %}
+{% endmatch %}
+
 {%- if !subcommands.is_empty() -%}
     {% if !name.is_empty() %}
         Subcommands:

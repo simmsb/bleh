@@ -284,12 +284,13 @@ pub trait Command<P> {
 
     async fn invoke(self, params: P);
 
-    fn into_erased<'c>(self) -> ErasedCommand<'c>
+    fn into_erased<'c>(self, description: Option<String>) -> ErasedCommand<'c>
     where
         Self: Sized + Clone + Send + Sync + 'c,
         P: ReifyParameterMeta,
     {
         ErasedCommand {
+            description,
             params: P::reify(),
             invoke: Arc::new(move |ctx, input| {
                 let (input, params): (&str, P) = Self::parse(ctx, input)?;
@@ -303,6 +304,7 @@ pub trait Command<P> {
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
 pub struct ErasedCommand<'c> {
+    pub description: Option<String>,
     params: Vec<ParameterMeta>,
     invoke: Arc<
         dyn for<'a> Fn(
@@ -387,6 +389,7 @@ doit!(dummy, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
 
 #[derive(Default, Clone)]
 pub struct Group<'c> {
+    pub description: Option<String>,
     pub inner: HashMap<String, GroupOrCommand<'c>>,
     pub fallback: Option<ErasedCommand<'c>>,
 }
@@ -496,6 +499,7 @@ pub enum GroupOrCommandRef<'a, 'c> {
 
 #[derive(Default, Clone)]
 pub struct CommandBuilder<'c> {
+    description: Option<String>,
     root: Group<'c>,
 }
 
@@ -504,13 +508,26 @@ impl<'c> CommandBuilder<'c> {
         CommandBuilder::default()
     }
 
+    pub fn description(&mut self, description: &str) -> &mut Self {
+        assert!(
+            self.description.is_none(),
+            "You have a description set already"
+        );
+
+        self.description = Some(description.to_owned());
+
+        self
+    }
+
     pub fn group<F>(&mut self, name: &str, f: F) -> &mut Self
     where
         F: FnOnce(&mut CommandBuilder<'c>),
     {
         let mut inner = CommandBuilder::default();
         f(&mut inner);
-        self.root.add_group(name, inner.done());
+        let mut group = inner.done();
+        group.description = self.description.take();
+        self.root.add_group(name, group);
         self
     }
 
@@ -519,7 +536,7 @@ impl<'c> CommandBuilder<'c> {
         C: Command<P> + Clone + Send + Sync + 'c,
         P: ReifyParameterMeta,
     {
-        let ec = c.into_erased();
+        let ec = c.into_erased(self.description.take());
         self.root.add_command(name, ec);
         self
     }

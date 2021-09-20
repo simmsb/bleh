@@ -9,3 +9,9 @@
 {%- else -%}
 No parameters
 {%- endif %}
+{% match description -%}
+    {% when Some with (description) %}
+        <h5>Description:</h5>
+        <p>{{ description }}</p>
+    {% when None %}
+{% endmatch %}

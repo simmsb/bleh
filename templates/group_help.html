@@ -2,6 +2,13 @@
 <h3>Group: {{ name }}</h3>
 {% endif %}
 
+{% match description %}
+    {% when Some with (description) %}
+        <h5>Description:</h5>
+        <p>{{ description }}</p>
+    {% when None %}
+{% endmatch %}
+
 {%- if !subcommands.is_empty() -%}
     {% if !name.is_empty() %}
         <h5>Subcommands:</h5>
