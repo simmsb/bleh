@@ -6,20 +6,23 @@
 #![feature(const_slice_from_raw_parts)]
 #![feature(const_type_name)]
 
-use std::ffi::OsString;
+use std::{ffi::OsString, sync::Arc};
 
 use color_eyre::eyre::Result;
 use envconfig::Envconfig;
-use matrix_sdk::{Client, config::{ClientConfig, SyncSettings}};
+use matrix_sdk::{
+    config::{ClientConfig, SyncSettings},
+    Client,
+};
 use path_abs::PathAbs;
+use sqlx::sqlite::SqlitePool;
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
-use sqlx::sqlite::SqlitePool;
 
 mod commands;
-pub mod framework;
 pub mod rrules;
-mod handlers;
+
+use commands::PoolContext;
 
 #[derive(Envconfig)]
 struct Config {
@@ -79,7 +82,12 @@ async fn login_and_sync(config: &Config, pool: SqlitePool) -> Result<()> {
 
     rrules::setup(client.clone(), &pool).await;
 
-    handlers::register_handlers(client.clone(), pool, commands::make_commands()).await;
+    bleh::handlers::register_handlers(
+        client.clone(),
+        commands::make_commands(),
+        Arc::new(move |base| PoolContext::new(base, pool.clone())),
+    )
+    .await;
 
     let sync_settings = SyncSettings::default().token(client.sync_token().await.unwrap());
 

@@ -8,25 +8,34 @@ use matrix_sdk::{
     },
     Client,
 };
-use sqlx::SqlitePool;
 
-use crate::framework::{Context, Group};
+use crate::framework::{
+    commands::{Group, GroupMeta},
+    context::BaseContext,
+};
 
-#[derive(Clone)]
-pub struct OnMessage {
+pub struct OnMessage<C> {
     prefix: Arc<String>,
     client: Client,
-    commands: Arc<Group<'static>>,
-    pool: SqlitePool,
+    commands: Arc<Group<C>>,
+    commands_meta: Arc<GroupMeta>,
+    build_context: Arc<dyn Fn(BaseContext) -> C + Send + Sync + 'static>,
 }
 
-impl OnMessage {
-    pub fn new(prefix: String, client: Client, pool: SqlitePool, commands: Group<'static>) -> Self {
+impl<C: Send + 'static> OnMessage<C> {
+    pub fn new(
+        prefix: String,
+        client: Client,
+        commands: Group<C>,
+        build_context: Arc<dyn Fn(BaseContext) -> C + Send + Sync + 'static>,
+    ) -> Self {
+        let commands_meta = Arc::new(commands.meta());
         Self {
             prefix: Arc::new(prefix),
             client,
             commands: Arc::new(commands),
-            pool,
+            commands_meta,
+            build_context,
         }
     }
 
@@ -67,14 +76,15 @@ impl OnMessage {
             None => return,
         };
 
-        let ctx = Context {
+        let base_ctx = BaseContext {
             client: self.client.clone(),
             author: message.sender.clone(),
             room,
             original_event: message.clone(),
-            root: self.commands.clone(),
-            pool: self.pool.clone(),
+            root: self.commands_meta.clone(),
         };
+
+        let ctx = (self.build_context)(base_ctx);
 
         let _ = cmd.invoke(ctx, rest).await;
     }

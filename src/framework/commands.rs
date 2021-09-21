@@ -1,81 +1,13 @@
 use std::{collections::HashMap, error::Error, future::Future, pin::Pin, str::FromStr, sync::Arc};
 
-use matrix_sdk::{
-    room::Joined,
-    ruma::{
-        api::client::r0::message::send_message_event,
-        events::{room::message::MessageEventContent, AnyMessageEventContent, SyncMessageEvent},
-        UserId,
-    },
-    Client,
-};
-use sqlx::SqlitePool;
-
-#[derive(Clone)]
-pub struct Context {
-    pub client: Client,
-    pub author: UserId,
-    pub room: Joined,
-    pub original_event: SyncMessageEvent<MessageEventContent>,
-    pub root: Arc<Group<'static>>,
-    pub pool: SqlitePool,
-}
-
-impl Context {
-    pub async fn send(&self, msg: &str) -> matrix_sdk::Result<send_message_event::Response> {
-        let m = MessageEventContent::text_plain(msg);
-
-        self.room.send(m, None).await
-    }
-
-    pub async fn reply(&self, msg: &str) -> matrix_sdk::Result<send_message_event::Response> {
-        let m = MessageEventContent::text_reply_plain(
-            msg,
-            &self
-                .original_event
-                .clone()
-                .into_full_event(self.room.room_id().clone()),
-        );
-
-        self.room.send(m, None).await
-    }
-
-    pub async fn send_html(
-        &self,
-        plain: &str,
-        html: &str,
-    ) -> matrix_sdk::Result<send_message_event::Response> {
-        let m = AnyMessageEventContent::RoomMessage(MessageEventContent::text_html(plain, html));
-
-        self.room.send(m, None).await
-    }
-
-    pub async fn reply_html(
-        &self,
-        plain: &str,
-        html: &str,
-    ) -> matrix_sdk::Result<send_message_event::Response> {
-        let m = AnyMessageEventContent::RoomMessage(MessageEventContent::text_reply_html(
-            plain,
-            html,
-            &self
-                .original_event
-                .clone()
-                .into_full_event(self.room.room_id().clone()),
-        ));
-
-        self.room.send(m, None).await
-    }
-}
-
-pub trait Parameter
+pub trait Parameter<C>
 where
     Self: Sized,
 {
     const INFO: &'static str;
     const VISIBLE: bool;
 
-    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>>;
+    fn parse<'a>(ctx: &C, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>>;
     fn meta() -> ParameterMeta {
         ParameterMeta {
             info: Self::INFO,
@@ -92,14 +24,11 @@ pub struct ParameterMeta {
 
 macro_rules! p_via_nom {
     ($T:ty, $fn:expr) => {
-        impl Parameter for $T {
+        impl<C> Parameter<C> for $T {
             const INFO: &'static str = stringify!($T);
             const VISIBLE: bool = true;
 
-            fn parse<'a>(
-                _ctx: &Context,
-                input: &'a str,
-            ) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+            fn parse<'a>(_ctx: &C, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
                 nom::sequence::delimited(
                     nom::character::complete::multispace0,
                     $fn,
@@ -109,24 +38,6 @@ macro_rules! p_via_nom {
             }
         }
     };
-}
-
-impl Parameter for Context {
-    const INFO: &'static str = "Context";
-    const VISIBLE: bool = false;
-
-    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
-        Ok((input, ctx.clone()))
-    }
-}
-
-impl Parameter for SqlitePool {
-    const INFO: &'static str = "SqlitePool";
-    const VISIBLE: bool = false;
-
-    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
-        Ok((input, ctx.pool.clone()))
-    }
 }
 
 p_via_nom!(u64, nom::character::complete::u64);
@@ -157,19 +68,19 @@ p_via_nom!(
 #[derive(Clone)]
 pub struct Remainder(pub String);
 
-impl Parameter for Remainder {
+impl<C> Parameter<C> for Remainder {
     const INFO: &'static str = "String*";
 
     const VISIBLE: bool = true;
 
-    fn parse<'a>(_ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+    fn parse<'a>(_ctx: &C, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
         Ok(("", Self(input.to_string())))
     }
 }
 
 pub struct ViaFromStr<T>(pub T);
 
-impl<T: FromStr> Parameter for ViaFromStr<T>
+impl<T: FromStr, C> Parameter<C> for ViaFromStr<T>
 where
     <T as FromStr>::Err: Error + 'static,
 {
@@ -177,22 +88,19 @@ where
 
     const VISIBLE: bool = true;
 
-    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
-        let (input, chunk) = <String as Parameter>::parse(ctx, input)?;
+    fn parse<'a>(ctx: &C, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+        let (input, chunk) = <String as Parameter<C>>::parse(ctx, input)?;
         let res = chunk.parse()?;
         Ok((input, ViaFromStr(res)))
     }
 }
 
-impl<T: Parameter> Parameter for Vec<T> {
+impl<T: Parameter<C>, C> Parameter<C> for Vec<T> {
     const INFO: &'static str = str_concat(str_concat("Vec<", T::INFO).as_str(), ">").as_str();
 
     const VISIBLE: bool = T::VISIBLE;
 
-    fn parse<'a>(
-        ctx: &Context,
-        mut input: &'a str,
-    ) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+    fn parse<'a>(ctx: &C, mut input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
         let mut out = Vec::new();
 
         while let Ok((new_input, v)) = T::parse(ctx, input) {
@@ -248,17 +156,17 @@ const fn str_concat(l: &'static str, r: &'static str) -> HelpMe {
     }
 }
 
-impl<T: Parameter, const NAME: &'static str> Parameter for Named<T, NAME> {
+impl<T: Parameter<C>, C, const NAME: &'static str> Parameter<C> for Named<T, NAME> {
     const INFO: &'static str = str_concat(str_concat(NAME, ": ").as_str(), T::INFO).as_str();
     const VISIBLE: bool = T::VISIBLE;
 
-    fn parse<'a>(ctx: &Context, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
+    fn parse<'a>(ctx: &C, input: &'a str) -> Result<(&'a str, Self), Box<dyn Error + 'a>> {
         let (input, v) = T::parse(ctx, input)?;
         Ok((input, Named(v)))
     }
 }
 
-pub trait ReifyParameterMeta {
+pub trait ReifyParameterMeta<C> {
     fn reify_inner(out: &mut Vec<ParameterMeta>);
     fn reify() -> Vec<ParameterMeta> {
         let mut v = Vec::new();
@@ -267,71 +175,55 @@ pub trait ReifyParameterMeta {
     }
 }
 
-impl<T: Parameter, U: ReifyParameterMeta> ReifyParameterMeta for frunk::HCons<T, U> {
+impl<T: Parameter<C>, C, U> ReifyParameterMeta<C> for frunk::HCons<T, U>
+where
+    U: ReifyParameterMeta<C>,
+{
     fn reify_inner(out: &mut Vec<ParameterMeta>) {
         out.push(T::meta());
         U::reify_inner(out);
     }
 }
 
-impl ReifyParameterMeta for frunk::HNil {
+impl<C> ReifyParameterMeta<C> for frunk::HNil {
     fn reify_inner(_out: &mut Vec<ParameterMeta>) {}
 }
 
-#[async_trait::async_trait]
-pub trait Command<P> {
-    fn parse(ctx: Context, input: &str) -> Result<(&str, P), Box<dyn Error + '_>>;
-
-    async fn invoke(self, params: P);
-
-    fn into_erased<'c>(self, description: Option<String>) -> ErasedCommand<'c>
-    where
-        Self: Sized + Clone + Send + Sync + 'c,
-        P: ReifyParameterMeta,
-    {
-        ErasedCommand {
-            description,
-            params: P::reify(),
-            invoke: Arc::new(move |ctx, input| {
-                let (input, params): (&str, P) = Self::parse(ctx, input)?;
-
-                Ok((input, self.clone().invoke(params)))
-            }),
-        }
-    }
-}
-
-#[derive(Clone)]
+#[derive(derivative::Derivative)]
+#[derivative(Clone(bound = ""))]
 #[allow(clippy::type_complexity)]
-pub struct ErasedCommand<'c> {
-    pub description: Option<String>,
-    params: Vec<ParameterMeta>,
+pub struct ErasedCommand<C> {
+    pub meta: CommandMeta,
     invoke: Arc<
         dyn for<'a> Fn(
-                Context,
+                C,
                 &'a str,
             ) -> Result<
-                (&'a str, Pin<Box<dyn Future<Output = ()> + Send + 'c>>),
+                (&'a str, Pin<Box<dyn Future<Output = ()> + Send + 'static>>),
                 Box<dyn Error + 'a>,
             > + Send
             + Sync
-            + 'c,
+            + 'static,
     >,
 }
 
-impl<'c> ErasedCommand<'c> {
-    pub async fn invoke<'i>(
-        &self,
-        ctx: Context,
-        input: &'i str,
-    ) -> Result<(), Box<dyn Error + 'i>> {
+impl<C> ErasedCommand<C> {
+    pub async fn invoke<'i>(&self, ctx: C, input: &'i str) -> Result<(), Box<dyn Error + 'i>> {
         let (_, fut) = (self.invoke)(ctx, input)?;
 
         fut.await;
 
         Ok(())
     }
+}
 
+#[derive(Clone)]
+pub struct CommandMeta {
+    pub description: Option<String>,
+    pub params: Vec<ParameterMeta>,
+}
+
+impl CommandMeta {
     pub fn visible_params(&self) -> impl Iterator<Item = &str> {
         self.params.iter().filter(|m| m.visible).map(|m| m.info)
     }
@@ -342,17 +234,46 @@ impl<'c> ErasedCommand<'c> {
 }
 
 #[async_trait::async_trait]
-impl<F, Fut> Command<frunk::HList![]> for F
+pub trait Command<P, C> {
+    fn parse<'a>(ctx: &'_ C, input: &'a str) -> Result<(&'a str, P), Box<dyn Error + 'a>>;
+
+    async fn invoke(self, ctx: C, params: P);
+
+    fn into_erased(self, description: Option<String>) -> ErasedCommand<C>
+    where
+        Self: Sized + Clone + Send + Sync + 'static,
+        P: ReifyParameterMeta<C>,
+    {
+        ErasedCommand {
+            meta: CommandMeta {
+                description,
+                params: P::reify(),
+            },
+            invoke: Arc::new(move |ctx, input| {
+                let (input, params): (&str, P) = Self::parse(&ctx, input)?;
+
+                Ok((input, self.clone().invoke(ctx, params)))
+            }),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<F, C, Fut> Command<frunk::HList![], C> for F
 where
-    F: FnOnce() -> Fut + Clone + Send + Sync + 'static,
+    F: FnOnce(C) -> Fut + Clone + Send + Sync + 'static,
+    C: Send + 'static,
     Fut: std::future::Future<Output = ()> + Send,
 {
-    fn parse(_: Context, input: &str) -> Result<(&str, frunk::HList![]), Box<dyn Error + '_>> {
+    fn parse<'a>(
+        _: &'_ C,
+        input: &'a str,
+    ) -> Result<(&'a str, frunk::HList![]), Box<dyn Error + 'a>> {
         Ok((input, frunk::hlist!()))
     }
 
-    async fn invoke(self, _: frunk::HList![]) {
-        self().await;
+    async fn invoke(self, ctx: C, _: frunk::HList![]) {
+        self(ctx).await;
     }
 }
 
@@ -363,23 +284,24 @@ macro_rules! doit {
 
         #[async_trait::async_trait]
         #[allow(non_snake_case)]
-        impl<F, Fut, $($Y),*> Command<frunk::HList![$($Y),*]> for F
-            where F: FnOnce($($Y),*) -> Fut + Clone + Send + Sync + 'static,
+        impl<F, C, Fut, $($Y),*> Command<frunk::HList![$($Y),*], C> for F
+            where F: FnOnce(C, $($Y),*) -> Fut + Clone + Send + Sync + 'static,
+                  C: Send + 'static,
                   Fut: std::future::Future<Output = ()> + Send,
-                  $($Y: Parameter + Send + 'static),*
+                  $($Y: Parameter<C> + Send + 'static),*
         {
-            fn parse(ctx: Context, input: &str) -> Result<(&str, frunk::HList![$($Y),*]), Box<dyn Error + '_>> {
+            fn parse<'a>(ctx: &'_ C, input: &'a str) -> Result<(&'a str, frunk::HList![$($Y),*]), Box<dyn Error + 'a>> {
                 $(
-                    let (input, $Y) = $Y::parse(&ctx, input)?;
+                    let (input, $Y) = $Y::parse(ctx, input)?;
                 )*
 
                 Ok((input, frunk::hlist![$($Y),*]))
             }
 
-            async fn invoke(self, params: frunk::HList![$($Y),*]) {
+            async fn invoke(self, ctx: C, params: frunk::HList![$($Y),*]) {
                 let frunk::hlist_pat!($($Y),*) = params;
 
-                self($($Y),*).await;
+                self(ctx, $($Y),*).await;
             }
         }
     }
@@ -387,11 +309,34 @@ macro_rules! doit {
 
 doit!(dummy, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
 
-#[derive(Default, Clone)]
-pub struct Group<'c> {
+#[derive(derivative::Derivative)]
+#[derivative(Clone(bound = ""), Default(bound = ""))]
+pub struct Group<C> {
     pub description: Option<String>,
-    pub inner: HashMap<String, GroupOrCommand<'c>>,
-    pub fallback: Option<ErasedCommand<'c>>,
+    pub inner: HashMap<String, GroupOrCommand<C>>,
+    pub fallback: Option<ErasedCommand<C>>,
+}
+
+#[derive(Clone)]
+pub struct GroupMeta {
+    pub description: Option<String>,
+    pub inner: HashMap<String, GroupOrCommandMeta>,
+    pub fallback: Option<CommandMeta>,
+}
+
+impl GroupMeta {
+    /// Find a command or group given a path, this doesn't peek into Group.fallback
+    pub fn find_thing<'a>(&'a self, path: &[&str]) -> Option<GroupOrCommandMetaRef<'a>> {
+        match *path {
+            [] => Some(GroupOrCommandMetaRef::Group(self)),
+            [x, ref xs @ ..] => match self.inner.get(x) {
+                Some(GroupOrCommandMeta::Command(c)) => Some(GroupOrCommandMetaRef::Command(c)),
+                Some(GroupOrCommandMeta::Group(g)) => g.find_thing(xs),
+                None => Some(GroupOrCommandMetaRef::Group(self)),
+            },
+        }
+    }
+
 }
 
 fn next_word(s: &str) -> Option<(&str, &str)> {
@@ -402,8 +347,8 @@ fn next_word(s: &str) -> Option<(&str, &str)> {
     }
 }
 
-impl<'c> Group<'c> {
-    fn add_command(&mut self, name: &str, command: ErasedCommand<'c>) {
+impl<C> Group<C> {
+    fn add_command(&mut self, name: &str, command: ErasedCommand<C>) {
         match self.inner.get_mut(name) {
             Some(GroupOrCommand::Command(_)) => {
                 panic!("Command {} already exists", name)
@@ -424,7 +369,7 @@ impl<'c> Group<'c> {
             .insert(name.to_owned(), GroupOrCommand::Command(command));
     }
 
-    fn add_group(&mut self, name: &str, group: Group<'c>) {
+    fn add_group(&mut self, name: &str, group: Group<C>) {
         match self.inner.get_mut(name) {
             Some(GroupOrCommand::Group(_)) => {
                 panic!("Group with name {} already exists", name)
@@ -448,7 +393,7 @@ impl<'c> Group<'c> {
     pub fn find_command_parsing<'a, 'b>(
         &'a self,
         input: &'b str,
-    ) -> Option<(&'a ErasedCommand<'c>, &'b str)> {
+    ) -> Option<(&'a ErasedCommand<C>, &'b str)> {
         if let Some((x, xs)) = next_word(input) {
             match self.inner.get(x) {
                 Some(GroupOrCommand::Command(c)) => Some((c, xs)),
@@ -461,7 +406,7 @@ impl<'c> Group<'c> {
     }
 
     /// Find a command given a path
-    pub fn find_command(&self, path: &[&str]) -> Option<&ErasedCommand<'c>> {
+    pub fn find_command(&self, path: &[&str]) -> Option<&ErasedCommand<C>> {
         match *path {
             [] => self.fallback.as_ref(),
             [x, ref xs @ ..] => match self.inner.get(x) {
@@ -473,7 +418,7 @@ impl<'c> Group<'c> {
     }
 
     /// Find a command or group given a path, this doesn't peek into Group.fallback
-    pub fn find_thing<'a>(&'a self, path: &[&str]) -> Option<GroupOrCommandRef<'a, 'c>> {
+    pub fn find_thing<'a>(&'a self, path: &[&str]) -> Option<GroupOrCommandRef<'a, C>> {
         match *path {
             [] => Some(GroupOrCommandRef::Group(self)),
             [x, ref xs @ ..] => match self.inner.get(x) {
@@ -483,27 +428,63 @@ impl<'c> Group<'c> {
             },
         }
     }
+
+    pub fn meta(&self) -> GroupMeta {
+        GroupMeta {
+            description: self.description.clone(),
+            inner: self.inner.iter().map(|(k, v)| (k.clone(), v.meta())).collect(),
+            fallback: self.fallback.as_ref().map(|c| c.meta.clone()),
+        }
+    }
 }
 
-#[derive(enum_as_inner::EnumAsInner, Clone)]
-pub enum GroupOrCommand<'c> {
-    Command(ErasedCommand<'c>),
-    Group(Group<'c>),
-}
-
+#[derive(derivative::Derivative)]
+#[derivative(Clone(bound = ""))]
 #[derive(enum_as_inner::EnumAsInner)]
-pub enum GroupOrCommandRef<'a, 'c> {
-    Command(&'a ErasedCommand<'c>),
-    Group(&'a Group<'c>),
+pub enum GroupOrCommand<C> {
+    Command(ErasedCommand<C>),
+    Group(Group<C>),
 }
 
-#[derive(Default, Clone)]
-pub struct CommandBuilder<'c> {
+impl<C> GroupOrCommand<C> {
+    fn meta(&self) -> GroupOrCommandMeta {
+        match self {
+            GroupOrCommand::Command(c) => GroupOrCommandMeta::Command(c.meta.clone()),
+            GroupOrCommand::Group(g) => GroupOrCommandMeta::Group(g.meta()),
+        }
+    }
+}
+
+// #[derive(derivative::Derivative)]
+// #[derivative(Clone(bound=""))]
+#[derive(enum_as_inner::EnumAsInner)]
+pub enum GroupOrCommandRef<'a, C> {
+    Command(&'a ErasedCommand<C>),
+    Group(&'a Group<C>),
+}
+
+#[derive(Clone)]
+#[derive(enum_as_inner::EnumAsInner)]
+pub enum GroupOrCommandMeta {
+    Command(CommandMeta),
+    Group(GroupMeta),
+}
+
+#[derive(Clone)]
+#[derive(enum_as_inner::EnumAsInner)]
+pub enum GroupOrCommandMetaRef<'a> {
+    Command(&'a CommandMeta),
+    Group(&'a GroupMeta),
+}
+
+#[derive(derivative::Derivative)]
+#[derivative(Clone(bound = ""), Default(bound = ""))]
+pub struct CommandBuilder<C> {
     description: Option<String>,
-    root: Group<'c>,
+    root: Group<C>,
 }
 
-impl<'c> CommandBuilder<'c> {
+impl<C> CommandBuilder<C> {
     pub fn new() -> Self {
         CommandBuilder::default()
     }
@@ -521,7 +502,7 @@ impl<'c> CommandBuilder<'c> {
 
     pub fn group<F>(&mut self, name: &str, f: F) -> &mut Self
     where
-        F: FnOnce(&mut CommandBuilder<'c>),
+        F: FnOnce(&mut CommandBuilder<C>),
     {
         let mut inner = CommandBuilder::default();
         f(&mut inner);
@@ -531,17 +512,17 @@ impl<'c> CommandBuilder<'c> {
         self
     }
 
-    pub fn command<C, P>(&mut self, name: &str, c: C) -> &mut Self
+    pub fn command<Cmd, P>(&mut self, name: &str, cmd: Cmd) -> &mut Self
     where
-        C: Command<P> + Clone + Send + Sync + 'c,
-        P: ReifyParameterMeta,
+        Cmd: Command<P, C> + Clone + Send + Sync + 'static,
+        P: ReifyParameterMeta<C>,
     {
-        let ec = c.into_erased(self.description.take());
+        let ec = cmd.into_erased(self.description.take());
         self.root.add_command(name, ec);
         self
     }
 
-    pub fn done(&mut self) -> Group<'c> {
+    pub fn done(&mut self) -> Group<C> {
         self.clone().root
     }
 }
