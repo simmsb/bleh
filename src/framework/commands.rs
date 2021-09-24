@@ -215,6 +215,11 @@ impl<C> ErasedCommand<C> {
 
         Ok(())
     }
+
+    pub fn with_description(mut self, description: &str) -> Self {
+        self.meta.description = Some(description.to_owned());
+        self
+    }
 }
 
 #[derive(Clone)]
@@ -317,6 +322,13 @@ pub struct Group<C> {
     pub fallback: Option<ErasedCommand<C>>,
 }
 
+impl<C> Group<C> {
+    pub fn with_description(mut self, description: &str) -> Self {
+        self.description = Some(description.to_owned());
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct GroupMeta {
     pub description: Option<String>,
@@ -336,7 +348,6 @@ impl GroupMeta {
             },
         }
     }
-
 }
 
 fn next_word(s: &str) -> Option<(&str, &str)> {
@@ -432,7 +443,11 @@ impl<C> Group<C> {
     pub fn meta(&self) -> GroupMeta {
         GroupMeta {
             description: self.description.clone(),
-            inner: self.inner.iter().map(|(k, v)| (k.clone(), v.meta())).collect(),
+            inner: self
+                .inner
+                .iter()
+                .map(|(k, v)| (k.clone(), v.meta()))
+                .collect(),
             fallback: self.fallback.as_ref().map(|c| c.meta.clone()),
         }
     }
@@ -463,15 +478,13 @@ pub enum GroupOrCommandRef<'a, C> {
     Group(&'a Group<C>),
 }
 
-#[derive(Clone)]
-#[derive(enum_as_inner::EnumAsInner)]
+#[derive(Clone, enum_as_inner::EnumAsInner)]
 pub enum GroupOrCommandMeta {
     Command(CommandMeta),
     Group(GroupMeta),
 }
 
-#[derive(Clone)]
-#[derive(enum_as_inner::EnumAsInner)]
+#[derive(Clone, enum_as_inner::EnumAsInner)]
 pub enum GroupOrCommandMetaRef<'a> {
     Command(&'a CommandMeta),
     Group(&'a GroupMeta),
@@ -479,50 +492,34 @@ pub enum GroupOrCommandMetaRef<'a> {
 
 #[derive(derivative::Derivative)]
 #[derivative(Clone(bound = ""), Default(bound = ""))]
-pub struct CommandBuilder<C> {
-    description: Option<String>,
+pub struct GroupBuilder<C> {
     root: Group<C>,
 }
 
-impl<C> CommandBuilder<C> {
+impl<C> GroupBuilder<C> {
     pub fn new() -> Self {
-        CommandBuilder::default()
+        GroupBuilder::default()
     }
 
-    pub fn description(&mut self, description: &str) -> &mut Self {
-        assert!(
-            self.description.is_none(),
-            "You have a description set already"
-        );
-
-        self.description = Some(description.to_owned());
-
+    pub fn group(&mut self, name: &str, grp: Group<C>) -> &mut Self {
+        self.root.add_group(name, grp);
         self
     }
 
-    pub fn group<F>(&mut self, name: &str, f: F) -> &mut Self
-    where
-        F: FnOnce(&mut CommandBuilder<C>),
-    {
-        let mut inner = CommandBuilder::default();
-        f(&mut inner);
-        let mut group = inner.done();
-        group.description = self.description.take();
-        self.root.add_group(name, group);
-        self
-    }
-
-    pub fn command<Cmd, P>(&mut self, name: &str, cmd: Cmd) -> &mut Self
-    where
-        Cmd: Command<P, C> + Clone + Send + Sync + 'static,
-        P: ReifyParameterMeta<C>,
-    {
-        let ec = cmd.into_erased(self.description.take());
-        self.root.add_command(name, ec);
+    pub fn command(&mut self, name: &str, cmd: ErasedCommand<C>) -> &mut Self {
+        self.root.add_command(name, cmd);
         self
     }
 
     pub fn done(&mut self) -> Group<C> {
         self.clone().root
     }
+}
+
+pub fn cmd<Cmd, P, C>(cmd: Cmd) -> ErasedCommand<C>
+where
+    Cmd: Command<P, C> + Clone + Send + Sync + 'static,
+    P: ReifyParameterMeta<C>,
+{
+    cmd.into_erased(None)
 }

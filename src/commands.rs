@@ -3,7 +3,7 @@ use std::error::Error;
 use rrule::RRule;
 use sqlx::SqlitePool;
 
-use bleh::framework::commands::{CommandBuilder, Group, Named, Parameter, Remainder};
+use bleh::framework::commands::{cmd, Group, GroupBuilder, Named, Parameter, Remainder};
 use bleh::framework::context::{BaseContext, Context, ContextActions};
 
 #[derive(ambassador::Delegate)]
@@ -120,137 +120,155 @@ impl<'a> PlainGroupHelpTemplate<'a> {
 pub fn make_commands() -> Group<PoolContext> {
     use askama::Template;
 
-    CommandBuilder::new()
-        .description("say hi")
-        .command("hi", |c: PoolContext| async move {
-            let _ = c.send("Hi").await;
-        })
-        .description("uh oh")
-        .command("fart", |c: PoolContext| async move {
-            let _ = c
-                .send_html(
-                    "*farts*",
-                    "<h1><span data-mx-color=\"#7a5901\">*farts*</span></h1>",
-                )
-                .await;
-        })
-        .description("Some dumb recurrence rule thing")
+    GroupBuilder::new()
+        .command(
+            "hi",
+            cmd(|c: PoolContext| async move {
+                let _ = c.send("Hi").await;
+            })
+            .with_description("say hi"),
+        )
+        .command(
+            "fart",
+            cmd(|c: PoolContext| async move {
+                let _ = c
+                    .send_html(
+                        "*farts*",
+                        "<h1><span data-mx-color=\"#7a5901\">*farts*</span></h1>",
+                    )
+                    .await;
+            })
+            .with_description("uh oh"),
+        )
         .command(
             "recur",
-            |c: PoolContext,
-             p: SqlitePool,
-             Named(rule): Named<String, "rule">,
-             Named(Remainder(message)): Named<Remainder, "message">| async move {
-                let _parsed_rule: RRule = match rule.parse() {
-                    Ok(rule) => rule,
-                    Err(e) => {
-                        let _ = c.reply(&format!("Couldn't parse rule: {:?}", e)).await;
-                        return;
-                    }
-                };
+            cmd(
+                |c: PoolContext,
+                 p: SqlitePool,
+                 Named(rule): Named<String, "rule">,
+                 Named(Remainder(message)): Named<Remainder, "message">| async move {
+                    let _parsed_rule: RRule = match rule.parse() {
+                        Ok(rule) => rule,
+                        Err(e) => {
+                            let _ = c.reply(&format!("Couldn't parse rule: {:?}", e)).await;
+                            return;
+                        }
+                    };
 
-                let room_id = c.room().room_id().as_ref();
-                let author_id = c.author().as_ref();
-                let id = sqlx::query!(
-                    r#"INSERT INTO rrules ( rule, message, channel, userid )
+                    let room_id = c.room().room_id().as_ref();
+                    let author_id = c.author().as_ref();
+                    let id = sqlx::query!(
+                        r#"INSERT INTO rrules ( rule, message, channel, userid )
                        VALUES ( ?1, ?2, ?3, ?4 )"#,
-                    rule,
-                    message,
-                    room_id,
-                    author_id,
-                )
-                .execute(&p)
-                .await
-                .unwrap()
-                .last_insert_rowid();
+                        rule,
+                        message,
+                        room_id,
+                        author_id,
+                    )
+                    .execute(&p)
+                    .await
+                    .unwrap()
+                    .last_insert_rowid();
 
-                let r = crate::rrules::RRule {
-                    id,
-                    rule,
-                    message,
-                    channel: room_id.to_owned(),
-                    userid: author_id.to_owned(),
-                };
+                    let r = crate::rrules::RRule {
+                        id,
+                        rule,
+                        message,
+                        channel: room_id.to_owned(),
+                        userid: author_id.to_owned(),
+                    };
 
-                let _ = c.reply("Sure thing dude").await;
+                    let _ = c.reply("Sure thing dude").await;
 
-                tokio::spawn(async move {
-                    r.perform(c.client().clone()).await;
-                });
-            },
-        )
-        .description("no idea mate")
-        .group("grp", |g| {
-            g.command("a", |c: PoolContext| async move {
-                let _ = c.reply("A").await;
-            })
-            .command(
-                "b",
-                |c: PoolContext, Named(v): Named<String, "v">| async move {
-                    let _ = c.reply(&format!("B: {}", v)).await;
+                    tokio::spawn(async move {
+                        r.perform(c.client().clone()).await;
+                    });
                 },
-            );
-        })
-        .description("get help lol")
+            )
+            .with_description("Some dumb recurrence rule thing"),
+        )
+        .group(
+            "grp",
+            GroupBuilder::new()
+                .command(
+                    "a",
+                    cmd(|c: PoolContext| async move {
+                        let _ = c.reply("A").await;
+                    })
+                    .with_description("aaa"),
+                )
+                .command(
+                    "b",
+                    cmd(|c: PoolContext, Named(v): Named<String, "v">| async move {
+                        let _ = c.reply(&format!("B: {}", v)).await;
+                    }),
+                )
+                .done()
+                .with_description("no idea mate"),
+        )
         .command(
             "help",
-            |c: PoolContext, Named(path): Named<Vec<String>, "path">| async move {
-                let path = path.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-                let thing = match c.root().find_thing(&path) {
-                    Some(thing) => thing,
-                    None => {
-                        let _ = c.reply(&format!("Couldn't find {}", path.join(" "))).await;
-                        return;
-                    }
-                };
+            cmd(
+                |c: PoolContext, Named(path): Named<Vec<String>, "path">| async move {
+                    let path = path.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+                    let thing = match c.root().find_thing(&path) {
+                        Some(thing) => thing,
+                        None => {
+                            let _ = c.reply(&format!("Couldn't find {}", path.join(" "))).await;
+                            return;
+                        }
+                    };
 
-                match thing {
-                    bleh::framework::commands::GroupOrCommandMetaRef::Command(cmd) => {
-                        let name = path.join(" ");
-                        let params = cmd.visible_params().collect::<Vec<_>>();
-                        let plain = PlainCommandHelpTemplate::new(
-                            &name,
-                            &params,
-                            cmd.description.as_deref(),
-                        )
-                        .render()
-                        .unwrap();
-                        let html = HtmlCommandHelpTemplate::new(
-                            &name,
-                            &params,
-                            cmd.description.as_deref(),
-                        )
-                        .render()
-                        .unwrap();
-                        let _ = c.send_html(&plain, &html).await;
+                    match thing {
+                        bleh::framework::commands::GroupOrCommandMetaRef::Command(cmd) => {
+                            let name = path.join(" ");
+                            let params = cmd.visible_params().collect::<Vec<_>>();
+                            let plain = PlainCommandHelpTemplate::new(
+                                &name,
+                                &params,
+                                cmd.description.as_deref(),
+                            )
+                            .render()
+                            .unwrap();
+                            let html = HtmlCommandHelpTemplate::new(
+                                &name,
+                                &params,
+                                cmd.description.as_deref(),
+                            )
+                            .render()
+                            .unwrap();
+                            let _ = c.send_html(&plain, &html).await;
+                        }
+                        bleh::framework::commands::GroupOrCommandMetaRef::Group(grp) => {
+                            let name = path.join(" ");
+                            let subcommands =
+                                grp.inner.keys().map(|k| k.as_str()).collect::<Vec<_>>();
+                            let fallback = grp
+                                .fallback
+                                .as_ref()
+                                .map(|cmd| cmd.visible_params().collect::<Vec<_>>());
+                            let plain = PlainGroupHelpTemplate::new(
+                                &name,
+                                &subcommands,
+                                fallback.as_deref(),
+                                grp.description.as_deref(),
+                            )
+                            .render()
+                            .unwrap();
+                            let html = HtmlGroupHelpTemplate::new(
+                                &name,
+                                &subcommands,
+                                fallback.as_deref(),
+                                grp.description.as_deref(),
+                            )
+                            .render()
+                            .unwrap();
+                            let _ = c.send_html(&plain, &html).await;
+                        }
                     }
-                    bleh::framework::commands::GroupOrCommandMetaRef::Group(grp) => {
-                        let name = path.join(" ");
-                        let subcommands = grp.inner.keys().map(|k| k.as_str()).collect::<Vec<_>>();
-                        let fallback = grp
-                            .fallback
-                            .as_ref()
-                            .map(|cmd| cmd.visible_params().collect::<Vec<_>>());
-                        let plain = PlainGroupHelpTemplate::new(
-                            &name,
-                            &subcommands,
-                            fallback.as_deref(),
-                            grp.description.as_deref(),
-                        )
-                        .render()
-                        .unwrap();
-                        let html = HtmlGroupHelpTemplate::new(
-                            &name,
-                            &subcommands,
-                            fallback.as_deref(),
-                            grp.description.as_deref(),
-                        )
-                        .render()
-                        .unwrap();
-                        let _ = c.send_html(&plain, &html).await;
-                    }
-                }
-            },
+                },
+            )
+            .with_description("get help lol"),
         )
         .done()
 }
