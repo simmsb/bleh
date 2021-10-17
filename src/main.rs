@@ -99,6 +99,11 @@ async fn login_and_sync(config: &Config, pool: SqlitePool) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
+
+    #[cfg(feature = "console")]
+    console_subscriber::init();
+
+    #[cfg(not(feature = "console"))]
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("bleh=info".parse()?))
         .init();
