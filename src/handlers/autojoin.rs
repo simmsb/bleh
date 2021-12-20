@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use matrix_sdk::{
     room::Room,
-    ruma::events::{room::member::MemberEventContent, StrippedStateEvent},
+    ruma::events::room::member::StrippedRoomMemberEvent,
     Client,
 };
 use time::ext::NumericalStdDuration;
@@ -31,7 +31,7 @@ impl OnJoin {
 
     async fn on_stripped_state_member(
         &self,
-        room_member: StrippedStateEvent<MemberEventContent>,
+        room_member: StrippedRoomMemberEvent,
         room: Room,
     ) {
         if room_member.state_key != self.client.user_id().await.unwrap() {

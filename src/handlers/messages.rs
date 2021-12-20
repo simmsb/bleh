@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use matrix_sdk::{
     room::Room,
-    ruma::events::{
-        room::message::{MessageEventContent, MessageType, TextMessageEventContent},
-        SyncMessageEvent,
-    },
+    ruma::events::room::message::{MessageType, SyncRoomMessageEvent, TextMessageEventContent},
     Client,
 };
 
@@ -51,7 +48,7 @@ impl<C: Send + 'static> OnMessage<C> {
             .await;
     }
 
-    async fn on_room_message(&self, room: Room, message: SyncMessageEvent<MessageEventContent>) {
+    async fn on_room_message(&self, room: Room, message: SyncRoomMessageEvent) {
         let room = match room {
             Room::Joined(room) => room,
             _ => return,

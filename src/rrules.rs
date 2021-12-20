@@ -1,7 +1,7 @@
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 
 use matrix_sdk::{
-    ruma::{events::room::message::MessageEventContent, RoomId, UserId},
+    ruma::{events::room::message::RoomMessageEventContent, RoomId, UserId},
     Client,
 };
 use sqlx::SqlitePool;
@@ -21,8 +21,8 @@ impl RRule {
             .rule
             .parse()
             .expect("These should be validated earlier");
-        let room_id = RoomId::try_from(self.channel.as_str()).unwrap();
-        let user_id = UserId::try_from(self.userid.as_str()).unwrap();
+        let room_id = RoomId::parse(self.channel.as_str()).unwrap();
+        let user_id = UserId::parse(self.userid.as_str()).unwrap();
 
         let now = chrono::offset::Utc::now();
         for dt in &rrule {
@@ -42,8 +42,11 @@ impl RRule {
                 None => return,
             };
 
-            let m =
-                MessageEventContent::text_plain(&format!("{}: {}", user_id.as_str(), self.message));
+            let m = RoomMessageEventContent::text_plain(&format!(
+                "{}: {}",
+                user_id.as_str(),
+                self.message
+            ));
 
             let _ = joined.send(m, None).await;
         }
